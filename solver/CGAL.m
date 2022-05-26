@@ -26,6 +26,8 @@ FLAG_MULTRANK_P1 = false;
 FLAG_MULTRANK_P3 = false;
 SKETCH_FIELD = 'real'; % 'real' or 'complex'
 ERR = {};
+WARMSTARTINIT = {};
+TSTART=1;
 SAVEHIST = unique([2.^(0:floor(log2(T))),T])';
 
 SCALE_A = 1; % can be a scale or vector of size b
@@ -47,6 +49,10 @@ if ~isempty(varargin)
                     otherwise
                         error(['Unknown optimization method: ', varargin{tt+1}]);
                 end
+            case 'warmstartinit'
+                WARMSTARTINIT = varargin{tt+1};
+            case 'tstart'
+                TSTART = varargin{tt+1};
             case 'walltime'
                 WALLTIME = varargin{tt+1};
             case 'errfncs'
@@ -128,22 +134,45 @@ end
 [out, errNames, errNamesPrint, ptr] = createErrStructs();
 
 % Initialize the decision variable and the dual
-if FLAG_METHOD == 0
-    X = zeros(n,n);
-elseif FLAG_METHOD == 1
-    mySketch = NystromSketch(n, R, SKETCH_FIELD);
-elseif FLAG_METHOD == 2
-    UTHIN = zeros(n,1);
-    DTHIN = 0;
+y0 = zeros(size(b,1),1);
+if isempty(WARMSTARTINIT)
+    if FLAG_METHOD == 0
+        X = zeros(n,n);
+    elseif FLAG_METHOD == 1
+        mySketch = NystromSketch(n, R, SKETCH_FIELD);
+    elseif FLAG_METHOD == 2
+        UTHIN = zeros(n,1);
+        DTHIN = 0;
+    else
+        error('Unknown approach for storing decision variable.');
+    end
+
+    z = zeros(size(b,1),1);
+    y = y0;
+    pobj = 0;
+    TRACE = 0;
 else
-    error('Unknown approach for storing decision variable.');
+    if FLAG_METHOD == 0
+        error('Not implemented error');
+        %X = WARMSTARTINIT.X;
+    elseif FLAG_METHOD == 1
+        mySketch = WARMSTARTINIT.mySketch;
+        mySketch.S = mySketch.S .* SCALE_X;
+        [U,Delt] = mySketch.Reconstruct();
+        TRACE = trace(Delt);
+    elseif FLAG_METHOD == 2
+        error('Not implemented error');
+        %UTHIN = WARMSTARTINIT.UTHIN;
+        %DTHIN = WARMSTARTINIT.DTHIN;
+    else
+        error('Unknown approach for storing decision variable.');
+    end
+
+    z = WARMSTARTINIT.z ./ RESCALE_FEAS;
+    y = (WARMSTARTINIT.y ./ SCALE_A) .* SCALE_C;
+    pobj = WARMSTARTINIT.pobj ./ RESCALE_OBJ;
 end
 
-% Initialize the dual
-z = zeros(size(b,1),1);
-y0 = zeros(size(b,1),1);
-y = y0;
-pobj = 0;
 
 % Choose the linear minimization oracle
 if FLAG_LANCZOS == 2
@@ -155,7 +184,6 @@ else
 end
 
 
-
 cntTotal = 0; % Oracle counter for Primitive2
 
 % Start the timer
@@ -164,9 +192,7 @@ cputime0 = cputime;
 totTime = toc(timer);
 totCpuTime = cputime - cputime0;
 
-TRACE = 0;
-
-for t = 1:T
+for t = TSTART:T
     
     beta = beta0*sqrt(t+1);
     eta = 2/(t+1);
@@ -294,6 +320,7 @@ if FLAG_METHOD == 0
     U = X ./ SCALE_X;
     Delt = [];
 elseif FLAG_METHOD == 1
+    [U,Delt] = mySketch.Reconstruct();
     if FLAG_TRACECORRECTION
         Delt = Delt + ((TRACE-trace(Delt))/R)*eye(size(Delt));
     end

@@ -26,7 +26,7 @@ classdef NystromSketch < matlab.mixin.SetGet
     
     
     %% properties
-    properties (Access = private)
+    properties (Access = public)
         Omega     % (n x k) dimensional test matrix for the range of A (std Gaussian + orthonormalization)
         S         % (n x k) dimensional range sketch
     end
