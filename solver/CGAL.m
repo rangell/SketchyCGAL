@@ -352,6 +352,7 @@ pobj = pobj .* RESCALE_OBJ;
         if FLAG_METHOD == 1
             out.info.skPrimalObj = nan(numel(SAVEHIST),1);
             out.info.skPrimalFeas = nan(numel(SAVEHIST),1);
+            out.info.yFeasDot = nan(numel(SAVEHIST),1);
         end
         for eIt = 1:2:length(ERR)
             out.info.(ERR{eIt}) = nan(numel(SAVEHIST),1);
@@ -405,6 +406,7 @@ pobj = pobj .* RESCALE_OBJ;
                 out.info.skPrimalFeas(ptr,1) = norm((Primitive3MultRank(U) - b) .* RESCALE_FEAS) / (1 + norm(b_org));
             end
                 %norm((Ax_b_sketch - projK(Ax_b_sketch)).*scaleFeas);
+            out.info.yFeasDot(ptr, 1) = (y'*(z - b)) .* RESCALE_FEAS;
         elseif FLAG_METHOD == 0
             [U,Delt] = eigs(X, R, 'LM');
             U = U*sqrt(Delt);

@@ -24,22 +24,25 @@ C = (-0.25).*C;
 
 clearvars Problem;
 
-%% Construct the Black Box Oracles for MaxCut SDP
+%% Create warm-start data and primitives
+warmStartFrac = 0.99;
 
-Primitive1 = @(x) C*x;
+warmStartn = floor(warmStartFrac * n);
+warmStartIndices = 1:warmStartn; % we can change what subset later
+warmStartC = C(warmStartIndices, warmStartIndices);
+
+Primitive1 = @(x) warmStartC*x;
 Primitive2 = @(y,x) y.*x;
 Primitive3 = @(x) sum(x.^2,2);
-a = n;
-b = ones(n,1);
+a = warmStartn;
+b = ones(warmStartn,1);
 
 % Compute scaling factors
-SCALE_X = 1/n;
-SCALE_C = 1/norm(C,'fro');
-
-%% Implement rounding
+SCALE_X = 1/warmStartn;
+SCALE_C = 1/norm(warmStartC,'fro');
 
 err{1} = 'cutvalue'; % name for error
-err{2} = @(u) round(C,u); % function definition at the bottom of this script
+err{2} = @(u) round(warmStartC,u); % function definition at the bottom of this script
 
 %% Start memory logging
 % NOTE: This works only on Unix systems. 
@@ -59,40 +62,62 @@ timer = tic;
 cputimeBegin = cputime;
 
 % Initialize the decision variable
-warmstartinit.mySketch = NystromSketch(n, R, 'real');
+warmStartInit.mySketch = NystromSketch(warmStartn, R, 'real');
 
 % Initialize the dual
-warmstartinit.z = zeros(size(b,1),1);
-warmstartinit.y = zeros(size(b,1),1);
-warmstartinit.pobj = 0;
+warmStartInit.z = zeros(size(b,1),1);
+warmStartInit.y = zeros(size(b,1),1);
+warmStartInit.pobj = 0;
 
-[out, U, D, y, AX, pobj] = CGAL( n, Primitive1, Primitive2, Primitive3, a, b, R, maxit, beta0, K, ...
+[out, U, D, y, AX, pobj] = CGAL(warmStartn, Primitive1, Primitive2, Primitive3, a, b, R, maxit, beta0, K, ...
     'FLAG_MULTRANK_P1',true,... % This flag informs that Primitive1 can be applied to find AUU' for any size U. 
     'FLAG_MULTRANK_P3',true,... % This flag informs that Primitive3 can be applied to find (A'y)U for any size U.
     'SCALE_X',SCALE_X,... % SCALE_X prescales the primal variable X of the problem
     'SCALE_C',SCALE_C,... % SCALE_C prescales the cost matrix C of the problem
-    'warmstartinit', warmstartinit,... % warm start initialization of state variables
+    'warmstartinit', warmStartInit,... % warm start initialization of state variables
     'errfncs',err,... % err defines the spectral rounding for maxcut
-    'stoptol',0.01); % algorithm stops when 1e-2 relative accuracy is achieved
+    'stoptol',0.001); % algorithm stops when 1e-2 relative accuracy is achieved
 
 
-%% Test the warm start
+%% Create test primitives
+Primitive1 = @(x) C*x;
+Primitive2 = @(y,x) y.*x;
+Primitive3 = @(x) sum(x.^2,2);
+a = n;
+b = ones(n,1);
+
+% Compute scaling factors
+SCALE_X = 1/n;
+SCALE_C = 1/norm(C,'fro');
+
+%% Expand the warm-start solution
 XHat = U * D * U';
-warmstartinit.mySketch.S = XHat * warmstartinit.mySketch.Omega;
-warmstartinit.z = diag(XHat);
-warmstartinit.y = y;
-warmstartinit.pobj = trace(C * XHat);
+
+% Pad XHat
+XHat = padarray(XHat, [n - warmStartn, n - warmStartn], 'replicate', 'post');
+
+% Create a new appropriately-sized sketch
+warmStartInit.mySketch = NystromSketch(n, R, 'real');
+
+% Instantiate all other warm-start variables
+warmStartInit.mySketch.S = XHat * warmStartInit.mySketch.Omega;
+warmStartInit.z = diag(XHat);
+warmStartInit.y = cat(1, y, ones(n - warmStartn, 1));
+warmStartInit.pobj = trace(C * XHat);
+
+err{1} = 'cutvalue'; % name for error
+err{2} = @(u) round(C,u); % function definition at the bottom of this script
 
 [out, U, D, y, AX, pobj] = CGAL( n, Primitive1, Primitive2, Primitive3, a, b, R, maxit, beta0, K, ...
     'FLAG_MULTRANK_P1',true,... % This flag informs that Primitive1 can be applied to find AUU' for any size U. 
     'FLAG_MULTRANK_P3',true,... % This flag informs that Primitive3 can be applied to find (A'y)U for any size U.
     'SCALE_X',SCALE_X,... % SCALE_X prescales the primal variable X of the problem
     'SCALE_C',SCALE_C,... % SCALE_C prescales the cost matrix C of the problem
-    'warmstartinit', warmstartinit,... % warm start initialization of state variables
-    'tstart', 2500,... % hand-tuned starting t
+    'warmStartInit', warmStartInit,... % warm start initialization of state variables
+    'tstart', 1,... % hand-tuned starting t
     'errfncs',err,... % err defines the spectral rounding for maxcut
     'stoptol',0.001); % algorithm stops when 1e-3 relative accuracy is achieved
-                     
+
 cputimeEnd = cputime;
 totalTime = toc(timer);
 
