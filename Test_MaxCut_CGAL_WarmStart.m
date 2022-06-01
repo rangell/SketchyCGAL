@@ -25,7 +25,7 @@ C = (-0.25).*C;
 clearvars Problem;
 
 %% Create warm-start data and primitives
-warmStartFrac = 0.99;
+warmStartFrac = 1.0;
 
 warmStartn = floor(warmStartFrac * n);
 warmStartIndices = 1:warmStartn; % we can change what subset later
@@ -78,6 +78,7 @@ warmStartInit.pobj = 0;
     'errfncs',err,... % err defines the spectral rounding for maxcut
     'stoptol',0.001); % algorithm stops when 1e-2 relative accuracy is achieved
 
+return;
 
 %% Create test primitives
 Primitive1 = @(x) C*x;
@@ -114,9 +115,9 @@ err{2} = @(u) round(C,u); % function definition at the bottom of this script
     'SCALE_X',SCALE_X,... % SCALE_X prescales the primal variable X of the problem
     'SCALE_C',SCALE_C,... % SCALE_C prescales the cost matrix C of the problem
     'warmStartInit', warmStartInit,... % warm start initialization of state variables
-    'tstart', 1,... % hand-tuned starting t
+    'tstart', 2,... % hand-tuned starting t
     'errfncs',err,... % err defines the spectral rounding for maxcut
-    'stoptol',0.001); % algorithm stops when 1e-3 relative accuracy is achieved
+    'stoptol',0.01); % algorithm stops when 1e-3 relative accuracy is achieved
 
 cputimeEnd = cputime;
 totalTime = toc(timer);

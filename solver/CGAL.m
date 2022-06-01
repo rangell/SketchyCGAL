@@ -27,7 +27,7 @@ FLAG_MULTRANK_P3 = false;
 SKETCH_FIELD = 'real'; % 'real' or 'complex'
 ERR = {};
 WARMSTARTINIT = {};
-TSTART=1;
+TSTART = 1;
 SAVEHIST = unique([2.^(0:floor(log2(T))),T])';
 
 SCALE_A = 1; % can be a scale or vector of size b
@@ -192,8 +192,55 @@ cputime0 = cputime;
 totTime = toc(timer);
 totCpuTime = cputime - cputime0;
 
+
+%if TSTART > 1
+%    % Estimate TSTART
+%    pobjLB = -14135.716 ./ RESCALE_OBJ;
+%    curveEst = 0.75;  % Theoretical upper bound for now
+%
+%    infeasNorm = 0.5*norm(z-b)^2;
+%    pobjGap = pobj - pobjLB;
+%    % Just change this polynomial for different step size estimate
+%    %betaPoly = [infeasNorm, pobjGap, -infeasNorm*beta0^2 - 2*curveEst*beta0^2, -pobjGap*beta0^2];
+%    betaPoly = [infeasNorm, pobjGap, -2*infeasNorm*beta0^2, -2*pobjGap*beta0^2 -4*curveEst^2*beta0^4,...
+%                infeasNorm*beta0^4, pobjGap*beta0^4];
+%
+%    sol = roots(betaPoly);
+%    max_root = sol(imag(sol) == 0 & sol > 0);
+%    max_root = max(max_root);
+%
+%    assert(isreal(max_root));
+%    betaStartEst = real(max_root);
+%    tStartEst = (betaStartEst^2 - beta0^2) / beta0^2;
+%    fprintf('tStartEst: %f\n', tStartEst);
+%    TSTART = round(tStartEst)
+%end
+
 for t = TSTART:T
     
+    if t > 100
+        % Estimate TSTART
+        pobjLB = -14135.716 ./ RESCALE_OBJ;
+        curveEst = 1.1;  % Theoretical upper bound for now
+
+        infeasNorm = 0.5*norm(z-b)^2;
+        pobjGap = pobj - pobjLB;
+        % Just change this polynomial for different step size estimate
+        %betaPoly = [infeasNorm, pobjGap, -infeasNorm*beta0^2 - 2*curveEst*beta0^2, -pobjGap*beta0^2];
+        betaPoly = [infeasNorm, pobjGap, -2*infeasNorm*beta0^2, -2*pobjGap*beta0^2 -4*curveEst^2*beta0^4,...
+                    infeasNorm*beta0^4, pobjGap*beta0^4];
+
+        sol = roots(betaPoly);
+        max_root = sol(imag(sol) == 0 & sol > 0);
+        max_root = max(max_root);
+
+        assert(isreal(max_root));
+        betaStartEst = real(max_root);
+        tStartEst = (betaStartEst^2 - beta0^2) / beta0^2;
+        %fprintf('tStartEst: %f\n', tStartEst);
+        t = round(tStartEst);
+    end
+
     beta = beta0*sqrt(t+1);
     eta = 2/(t+1);
     
