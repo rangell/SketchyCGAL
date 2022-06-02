@@ -25,7 +25,7 @@ C = (-0.25).*C;
 clearvars Problem;
 
 %% Create warm-start data and primitives
-warmStartFrac = 1.0;
+warmStartFrac = 0.99;
 
 warmStartn = floor(warmStartFrac * n);
 warmStartIndices = 1:warmStartn; % we can change what subset later
@@ -61,24 +61,14 @@ maxit = 1e6; % limit on number of iterations
 timer = tic;
 cputimeBegin = cputime;
 
-% Initialize the decision variable
-warmStartInit.mySketch = NystromSketch(warmStartn, R, 'real');
-
-% Initialize the dual
-warmStartInit.z = zeros(size(b,1),1);
-warmStartInit.y = zeros(size(b,1),1);
-warmStartInit.pobj = 0;
-
 [out, U, D, y, AX, pobj] = CGAL(warmStartn, Primitive1, Primitive2, Primitive3, a, b, R, maxit, beta0, K, ...
     'FLAG_MULTRANK_P1',true,... % This flag informs that Primitive1 can be applied to find AUU' for any size U. 
     'FLAG_MULTRANK_P3',true,... % This flag informs that Primitive3 can be applied to find (A'y)U for any size U.
     'SCALE_X',SCALE_X,... % SCALE_X prescales the primal variable X of the problem
     'SCALE_C',SCALE_C,... % SCALE_C prescales the cost matrix C of the problem
-    'warmstartinit', warmStartInit,... % warm start initialization of state variables
     'errfncs',err,... % err defines the spectral rounding for maxcut
     'stoptol',0.001); % algorithm stops when 1e-2 relative accuracy is achieved
 
-return;
 
 %% Create test primitives
 Primitive1 = @(x) C*x;
@@ -114,10 +104,11 @@ err{2} = @(u) round(C,u); % function definition at the bottom of this script
     'FLAG_MULTRANK_P3',true,... % This flag informs that Primitive3 can be applied to find (A'y)U for any size U.
     'SCALE_X',SCALE_X,... % SCALE_X prescales the primal variable X of the problem
     'SCALE_C',SCALE_C,... % SCALE_C prescales the cost matrix C of the problem
-    'warmStartInit', warmStartInit,... % warm start initialization of state variables
-    'tstart', 2,... % hand-tuned starting t
+    'warm_start_init', warmStartInit,... % warm start initialization of state variables
+    'step_size_mode', 'dynamic',... % Which step-size schedule to use
+    'tstart', 2,... % this should be the initial t if we are warm-starting with std step-size schedule
     'errfncs',err,... % err defines the spectral rounding for maxcut
-    'stoptol',0.01); % algorithm stops when 1e-3 relative accuracy is achieved
+    'stoptol',0.001); % algorithm stops when 1e-3 relative accuracy is achieved
 
 cputimeEnd = cputime;
 totalTime = toc(timer);

@@ -19,15 +19,17 @@ STOPTOL = []; STOPCOND = []; % Default: No stopping condition
 FLAG_INCLUSION = ~isvector(b); % [true, false] = ['AX = b', 'b(:,1) <= AX <= b(:,2)]
 FLAG_LANCZOS = 2; % [0,1,2] = [Power Method, Lanczos Method, Lanczos Method (storage optimal implementation)]
 FLAG_TRACECORRECTION = true; % optional trace correction step
-FLAG_CAREFULLSTOPPING = false; % if true, solves the eigenvalue problem to higher accuracy
+FLAG_CAREFULLSTOPPING = true; % if true, solves the eigenvalue problem to higher accuracy
 FLAG_METHOD = 1; % [0,1,2] = [CGAL, SketchyCGAL, ThinCGAL]
+FLAG_STEP_SIZE_MODE = 0; % [0,1,2] = [std, static, dynamic]
 FLAG_EVALSURROGATEGAP = false; % if true, evalautes stopObj and stopFeas even if here is no stopping rule (i.e., STOPTOL = 0)
 FLAG_MULTRANK_P1 = false;
 FLAG_MULTRANK_P3 = false;
 SKETCH_FIELD = 'real'; % 'real' or 'complex'
 ERR = {};
-WARMSTARTINIT = {};
+WARM_START_INIT = {};
 TSTART = 1;
+PSEUDO_WARM_UP_STEPS = 100;  % for dynamic step size and no warm start init
 SAVEHIST = unique([2.^(0:floor(log2(T))),T])';
 
 SCALE_A = 1; % can be a scale or vector of size b
@@ -49,8 +51,19 @@ if ~isempty(varargin)
                     otherwise
                         error(['Unknown optimization method: ', varargin{tt+1}]);
                 end
-            case 'warmstartinit'
-                WARMSTARTINIT = varargin{tt+1};
+            case 'step_size_mode'
+                switch lower(varargin{tt+1})
+                    case 'std'
+                        FLAG_STEP_SIZE_MODE = 0;
+                    case 'static'
+                        FLAG_STEP_SIZE_MODE = 1;
+                    case 'dynamic'
+                        FLAG_STEP_SIZE_MODE = 2;
+                    otherwise
+                        error(['Unknown step size mode: ', varargin{tt+1}]);
+                end
+            case 'warm_start_init'
+                WARM_START_INIT = varargin{tt+1};
             case 'tstart'
                 TSTART = varargin{tt+1};
             case 'walltime'
@@ -100,6 +113,9 @@ if ~isempty(varargin)
     end
 end
 
+% Check arguments
+assert(~(FLAG_STEP_SIZE_MODE == 1 && isempty(WARM_START_INIT)));
+
 % Scale the problem
 b_org = b;
 a_org = a;
@@ -135,7 +151,7 @@ end
 
 % Initialize the decision variable and the dual
 y0 = zeros(size(b,1),1);
-if isempty(WARMSTARTINIT)
+if isempty(WARM_START_INIT)
     if FLAG_METHOD == 0
         X = zeros(n,n);
     elseif FLAG_METHOD == 1
@@ -154,23 +170,23 @@ if isempty(WARMSTARTINIT)
 else
     if FLAG_METHOD == 0
         error('Not implemented error');
-        %X = WARMSTARTINIT.X;
+        %X = WARM_START_INIT.X;
     elseif FLAG_METHOD == 1
-        mySketch = WARMSTARTINIT.mySketch;
+        mySketch = WARM_START_INIT.mySketch;
         mySketch.S = mySketch.S .* SCALE_X;
         [U,Delt] = mySketch.Reconstruct();
         TRACE = trace(Delt);
     elseif FLAG_METHOD == 2
         error('Not implemented error');
-        %UTHIN = WARMSTARTINIT.UTHIN;
-        %DTHIN = WARMSTARTINIT.DTHIN;
+        %UTHIN = WARM_START_INIT.UTHIN;
+        %DTHIN = WARM_START_INIT.DTHIN;
     else
         error('Unknown approach for storing decision variable.');
     end
 
-    z = WARMSTARTINIT.z ./ RESCALE_FEAS;
-    y = (WARMSTARTINIT.y ./ SCALE_A) .* SCALE_C;
-    pobj = WARMSTARTINIT.pobj ./ RESCALE_OBJ;
+    z = WARM_START_INIT.z ./ RESCALE_FEAS;
+    y = (WARM_START_INIT.y ./ SCALE_A) .* SCALE_C;
+    pobj = WARM_START_INIT.pobj ./ RESCALE_OBJ;
 end
 
 
@@ -183,7 +199,6 @@ else
     ApproxMinEvec = @(x,t) ApproxMinEvecPower(x, n, ceil(8*(t^0.5)*log(n))); % Power method (Storage-optimal but very slow)
 end
 
-
 cntTotal = 0; % Oracle counter for Primitive2
 
 % Start the timer
@@ -192,41 +207,48 @@ cputime0 = cputime;
 totTime = toc(timer);
 totCpuTime = cputime - cputime0;
 
+% Compute initial objective lower bound and curvature estimate
+if FLAG_STEP_SIZE_MODE > 0 && ~isempty(WARM_START_INIT)
+    tmp_beta = beta0*sqrt((1/STOPTOL)+1);
 
-%if TSTART > 1
-%    % Estimate TSTART
-%    pobjLB = -14135.716 ./ RESCALE_OBJ;
-%    curveEst = 0.75;  % Theoretical upper bound for now
-%
-%    infeasNorm = 0.5*norm(z-b)^2;
-%    pobjGap = pobj - pobjLB;
-%    % Just change this polynomial for different step size estimate
-%    %betaPoly = [infeasNorm, pobjGap, -infeasNorm*beta0^2 - 2*curveEst*beta0^2, -pobjGap*beta0^2];
-%    betaPoly = [infeasNorm, pobjGap, -2*infeasNorm*beta0^2, -2*pobjGap*beta0^2 -4*curveEst^2*beta0^4,...
-%                infeasNorm*beta0^4, pobjGap*beta0^4];
-%
-%    sol = roots(betaPoly);
-%    max_root = sol(imag(sol) == 0 & sol > 0);
-%    max_root = max(max_root);
-%
-%    assert(isreal(max_root));
-%    betaStartEst = real(max_root);
-%    tStartEst = (betaStartEst^2 - beta0^2) / beta0^2;
-%    fprintf('tStartEst: %f\n', tStartEst);
-%    TSTART = round(tStartEst)
-%end
+    % Compute lmo
+    if FLAG_INCLUSION
+        vt = y + tmp_beta.*(z - PROJBOX(z + (1/tmp_beta).*y));
+    else
+        vt = y + tmp_beta*(z-b);
+    end
+    eigsArg = @(u) Primitive1(u) + Primitive2(vt,u);
+    [u,sig,cntInner] = ApproxMinEvec(eigsArg, ceil(1/STOPTOL));
+    if sig > 0, a_t = min(a); else, a_t = max(a); end
+    u = sqrt(a_t)*u;
 
-for t = TSTART:T
-    
-    if t > 100
-        % Estimate TSTART
-        pobjLB = -14135.716 ./ RESCALE_OBJ;
-        curveEst = 1.1;  % Theoretical upper bound for now
+    AHk = Primitive3(u);
 
+    % Compute objective lower bound
+    pobjLB = Primitive1(u)'*u + y'*(AHk - b) + tmp_beta*(z-b)'*(AHk - z) + tmp_beta*norm(z-b)^2;
+
+    %% Compute curvature estimate
+    %tmp_eta = 0.5;  % maybe we should set this to be something else?
+    %curveEst = (norm(z + tmp_eta*(AHk - z) - b)^2 - norm(z-b)^2 - 2*tmp_eta*(z - b)'*(AHk - z)) / (tmp_eta^2);
+    curveEst = 0.5;
+end
+
+
+%% Optimization loop
+
+for stepNum = TSTART:T
+
+    % Determine effective time step
+    if FLAG_STEP_SIZE_MODE == 0 || (isempty(WARM_START_INIT) && stepNum < PSEUDO_WARM_UP_STEPS)
+        t = stepNum;
+    elseif FLAG_STEP_SIZE_MODE == 1 && stepNum > TSTART
+        t = t + 1;
+    else
+        % Estimate t
         infeasNorm = 0.5*norm(z-b)^2;
         pobjGap = pobj - pobjLB;
+
         % Just change this polynomial for different step size estimate
-        %betaPoly = [infeasNorm, pobjGap, -infeasNorm*beta0^2 - 2*curveEst*beta0^2, -pobjGap*beta0^2];
         betaPoly = [infeasNorm, pobjGap, -2*infeasNorm*beta0^2, -2*pobjGap*beta0^2 -4*curveEst^2*beta0^4,...
                     infeasNorm*beta0^4, pobjGap*beta0^4];
 
@@ -236,21 +258,19 @@ for t = TSTART:T
 
         assert(isreal(max_root));
         betaStartEst = real(max_root);
-        tStartEst = (betaStartEst^2 - beta0^2) / beta0^2;
-        %fprintf('tStartEst: %f\n', tStartEst);
-        t = round(tStartEst);
+        t = (betaStartEst^2 - beta0^2) / beta0^2;  % could round this, but don't have to
     end
 
     beta = beta0*sqrt(t+1);
     eta = 2/(t+1);
-    
+
     if FLAG_INCLUSION
         vt = y + beta.*(z - PROJBOX(z + (1/beta).*y));
     else
         vt = y + beta*(z-b);
     end
     eigsArg = @(u) Primitive1(u) + Primitive2(vt,u);
-    
+
     [u,sig,cntInner] = ApproxMinEvec(eigsArg,t);
     cntTotal = cntTotal + cntInner;
     
@@ -290,9 +310,9 @@ for t = TSTART:T
                 % stopping criterion, we do not check it again until we run
                 % 5 percent more iterations...
                 if FLAG_CAREFULLSTOPPING
-                    if ~exist('LastCheckpoint','var'), LastCheckpoint = t; end
+                    if ~exist('LastCheckpoint','var'), LastCheckpoint = stepNum; end
                     if t > 1.05*LastCheckpoint
-                        LastCheckpoint = t;
+                        LastCheckpoint = stepNum;
                         [u,sig,cntInner] = ApproxMinEvec(eigsArg,max(t^2,ceil(1/STOPTOL^2)));
                         cntTotal = cntTotal + cntInner;
                         if sig > 0, a_t = min(a); else, a_t = max(a); end
@@ -313,9 +333,25 @@ for t = TSTART:T
             end
         end
     end
-    
-    zEvec = Primitive3(u);
-    z = (1-eta)*z + eta*zEvec;
+
+    AHk = Primitive3(u);
+
+    if FLAG_STEP_SIZE_MODE == 2 && (~isempty(WARM_START_INIT) || stepNum >= PSEUDO_WARM_UP_STEPS-1)
+        % Update objective lower bound
+        candObjLB = Primitive1(u)'*u + y'*(AHk - b) + beta*(z-b)'*(AHk - z) + beta*norm(z-b)^2;
+        if pobjLB < candObjLB  % TODO: maybe implement CAREFUL updating of the lower bound
+            pobjLB = candObjLB;
+        end
+
+        %% Update curvature estimate (don't need to worry about careful updating here)
+        candCurveEst = (norm(z + eta*(AHk - z) - b)^2 - norm(z-b)^2 - 2*eta*(z - b)'*(AHk - z)) / (eta^2);
+        if curveEst < candCurveEst
+            fprintf('curveEst: %d\n', candCurveEst)
+            curveEst = 2 * curveEst;
+        end
+    end
+
+    z = (1-eta)*z + eta*AHk;
     TRACE = (1-eta)*TRACE + eta*a_t;
     
     objEvec = u'*Primitive1(u);
@@ -355,7 +391,7 @@ for t = TSTART:T
     end
     
     % Update OUT
-    if any(t==SAVEHIST), updateErrStructs(); printError(); end
+    if any(stepNum==SAVEHIST), updateErrStructs(); printError(); end
     
 end
 
@@ -382,6 +418,7 @@ pobj = pobj .* RESCALE_OBJ;
 
 %% Nested functions
     function [out, errNames, errNamesPrint, ptr] = createErrStructs()
+        out.info.effectTime = nan(numel(SAVEHIST),1);
         if ~isempty(STOPTOL) || FLAG_EVALSURROGATEGAP
             if ~isempty(STOPCOND)
                 out.info.stopCond = nan(numel(SAVEHIST),1);
@@ -397,8 +434,8 @@ pobj = pobj .* RESCALE_OBJ;
         out.info.primalObj = nan(numel(SAVEHIST),1);
         out.info.primalFeas = nan(numel(SAVEHIST),1);
         if FLAG_METHOD == 1
-            out.info.skPrimalObj = nan(numel(SAVEHIST),1);
-            out.info.skPrimalFeas = nan(numel(SAVEHIST),1);
+            %out.info.skPrimalObj = nan(numel(SAVEHIST),1);
+            %out.info.skPrimalFeas = nan(numel(SAVEHIST),1);
             out.info.yFeasDot = nan(numel(SAVEHIST),1);
         end
         for eIt = 1:2:length(ERR)
@@ -430,7 +467,7 @@ pobj = pobj .* RESCALE_OBJ;
     function updateErrStructs()
         if mod(ptr,20) == 0, printHeader(); end
         ptr = ptr+1;
-        out.iteration(ptr,1) = t;
+        out.iteration(ptr,1) = stepNum;
         out.time(ptr,1) = totTime;
         out.cputime(ptr,1) = totCpuTime;
         out.info.primalObj(ptr,1) = pobj * RESCALE_OBJ;
@@ -445,14 +482,15 @@ pobj = pobj .* RESCALE_OBJ;
                 Delt = Delt + ((TRACE-trace(Delt))/R)*eye(size(Delt));
             end
             U = U*sqrt(Delt);
-            out.info.skPrimalObj(ptr,1) = trace(U'*Primitive1MultRank(U)) * RESCALE_OBJ;
+            %out.info.skPrimalObj(ptr,1) = trace(U'*Primitive1MultRank(U)) * RESCALE_OBJ;
             if FLAG_INCLUSION
                 AUU = Primitive3MultRank(U);
-                out.info.skPrimalFeas(ptr,1) = norm((AUU - PROJBOX(AUU)) .* RESCALE_FEAS); % maybe /  (norm(PROJBOX(AUU) .* RESCALE_FEAS) + 1); ?
+                %out.info.skPrimalFeas(ptr,1) = norm((AUU - PROJBOX(AUU)) .* RESCALE_FEAS); % maybe /  (norm(PROJBOX(AUU) .* RESCALE_FEAS) + 1); ?
             else
-                out.info.skPrimalFeas(ptr,1) = norm((Primitive3MultRank(U) - b) .* RESCALE_FEAS) / (1 + norm(b_org));
+                %out.info.skPrimalFeas(ptr,1) = norm((Primitive3MultRank(U) - b) .* RESCALE_FEAS) / (1 + norm(b_org));
             end
                 %norm((Ax_b_sketch - projK(Ax_b_sketch)).*scaleFeas);
+            out.info.effectTime(ptr, 1) = t;
             out.info.yFeasDot(ptr, 1) = (y'*(z - b)) .* RESCALE_FEAS;
         elseif FLAG_METHOD == 0
             [U,Delt] = eigs(X, R, 'LM');
@@ -513,7 +551,7 @@ pobj = pobj .* RESCALE_OBJ;
     end
 
     function printError()
-        fprintf('| %7d |', t );
+        fprintf('| %7d |', stepNum );
         for pIt = 1:length(errNames)
             if ~isnan(out.info.(errNames{pIt})(ptr))
                 fprintf(' % 5.3e |', out.info.(errNames{pIt})(ptr) );
