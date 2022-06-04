@@ -25,7 +25,7 @@ C = (-0.25).*C;
 clearvars Problem;
 
 %% Create warm-start data and primitives
-warmStartFrac = 0.99;
+warmStartFrac = 0.9999;
 
 warmStartn = floor(warmStartFrac * n);
 warmStartIndices = 1:warmStartn; % we can change what subset later
@@ -66,8 +66,9 @@ cputimeBegin = cputime;
     'FLAG_MULTRANK_P3',true,... % This flag informs that Primitive3 can be applied to find (A'y)U for any size U.
     'SCALE_X',SCALE_X,... % SCALE_X prescales the primal variable X of the problem
     'SCALE_C',SCALE_C,... % SCALE_C prescales the cost matrix C of the problem
+    'step_size_mode', 'std',... % Which step-size schedule to use
     'errfncs',err,... % err defines the spectral rounding for maxcut
-    'stoptol',0.001); % algorithm stops when 1e-2 relative accuracy is achieved
+    'stoptol',0.0001); % algorithm stops when 1e-2 relative accuracy is achieved
 
 
 %% Create test primitives
@@ -81,20 +82,18 @@ b = ones(n,1);
 SCALE_X = 1/n;
 SCALE_C = 1/norm(C,'fro');
 
-%% Expand the warm-start solution
-XHat = U * D * U';
-
-% Pad XHat
-XHat = padarray(XHat, [n - warmStartn, n - warmStartn], 'replicate', 'post');
-
-% Create a new appropriately-sized sketch
+%% Expand the warm-start solution (in memory-efficient way)
 warmStartInit.mySketch = NystromSketch(n, R, 'real');
 
-% Instantiate all other warm-start variables
-warmStartInit.mySketch.S = XHat * warmStartInit.mySketch.Omega;
-warmStartInit.z = diag(XHat);
+% TODO: this might not be the best way to expand the warm-start matrix
+U = normc(cat(1, U, U(randi(size(U, 1), n - warmStartn, 1), :)));
+%U = normc(padarray(U, [n - warmStartn, 0], 'replicate', 'post'));
+
+warmStartInit.mySketch.S = U * (D * (U' * warmStartInit.mySketch.Omega));
+
+warmStartInit.z = Primitive3(U*sqrt(D));
 warmStartInit.y = cat(1, y, ones(n - warmStartn, 1));
-warmStartInit.pobj = trace(C * XHat);
+warmStartInit.pobj = trace(U' * (C * (U * D)));
 
 err{1} = 'cutvalue'; % name for error
 err{2} = @(u) round(C,u); % function definition at the bottom of this script
@@ -108,7 +107,7 @@ err{2} = @(u) round(C,u); % function definition at the bottom of this script
     'step_size_mode', 'dynamic',... % Which step-size schedule to use
     'tstart', 2,... % this should be the initial t if we are warm-starting with std step-size schedule
     'errfncs',err,... % err defines the spectral rounding for maxcut
-    'stoptol',0.001); % algorithm stops when 1e-3 relative accuracy is achieved
+    'stoptol',0.0001); % algorithm stops when 1e-3 relative accuracy is achieved
 
 cputimeEnd = cputime;
 totalTime = toc(timer);

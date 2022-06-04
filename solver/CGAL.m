@@ -17,9 +17,9 @@ if isempty(K), K = inf; end
 WALLTIME = inf; % Default: Walltime is infinite
 STOPTOL = []; STOPCOND = []; % Default: No stopping condition
 FLAG_INCLUSION = ~isvector(b); % [true, false] = ['AX = b', 'b(:,1) <= AX <= b(:,2)]
-FLAG_LANCZOS = 2; % [0,1,2] = [Power Method, Lanczos Method, Lanczos Method (storage optimal implementation)]
+FLAG_LANCZOS = 1; % [0,1,2] = [Power Method, Lanczos Method, Lanczos Method (storage optimal implementation)]
 FLAG_TRACECORRECTION = true; % optional trace correction step
-FLAG_CAREFULLSTOPPING = true; % if true, solves the eigenvalue problem to higher accuracy
+FLAG_CAREFULLSTOPPING = false; % if true, solves the eigenvalue problem to higher accuracy
 FLAG_METHOD = 1; % [0,1,2] = [CGAL, SketchyCGAL, ThinCGAL]
 FLAG_STEP_SIZE_MODE = 0; % [0,1,2] = [std, static, dynamic]
 FLAG_EVALSURROGATEGAP = false; % if true, evalautes stopObj and stopFeas even if here is no stopping rule (i.e., STOPTOL = 0)
@@ -207,8 +207,12 @@ cputime0 = cputime;
 totTime = toc(timer);
 totCpuTime = cputime - cputime0;
 
+% Upper bound on curvature estimate and pobjLB
+curveEst = 2.0;
+pobjLB = -inf;
+
 % Compute initial objective lower bound and curvature estimate
-if FLAG_STEP_SIZE_MODE > 0 && ~isempty(WARM_START_INIT)
+if FLAG_STEP_SIZE_MODE > 0 && TSTART > 1
     tmp_beta = beta0*sqrt((1/STOPTOL)+1);
 
     % Compute lmo
@@ -226,11 +230,6 @@ if FLAG_STEP_SIZE_MODE > 0 && ~isempty(WARM_START_INIT)
 
     % Compute objective lower bound
     pobjLB = Primitive1(u)'*u + y'*(AHk - b) + tmp_beta*(z-b)'*(AHk - z) + tmp_beta*norm(z-b)^2;
-
-    %% Compute curvature estimate
-    %tmp_eta = 0.5;  % maybe we should set this to be something else?
-    %curveEst = (norm(z + tmp_eta*(AHk - z) - b)^2 - norm(z-b)^2 - 2*tmp_eta*(z - b)'*(AHk - z)) / (tmp_eta^2);
-    curveEst = 0.5;
 end
 
 
@@ -239,7 +238,7 @@ end
 for stepNum = TSTART:T
 
     % Determine effective time step
-    if FLAG_STEP_SIZE_MODE == 0 || (isempty(WARM_START_INIT) && stepNum < PSEUDO_WARM_UP_STEPS)
+    if FLAG_STEP_SIZE_MODE == 0 || (TSTART == 1 && stepNum < PSEUDO_WARM_UP_STEPS)
         t = stepNum;
     elseif FLAG_STEP_SIZE_MODE == 1 && stepNum > TSTART
         t = t + 1;
@@ -339,15 +338,8 @@ for stepNum = TSTART:T
     if FLAG_STEP_SIZE_MODE == 2 && (~isempty(WARM_START_INIT) || stepNum >= PSEUDO_WARM_UP_STEPS-1)
         % Update objective lower bound
         candObjLB = Primitive1(u)'*u + y'*(AHk - b) + beta*(z-b)'*(AHk - z) + beta*norm(z-b)^2;
-        if pobjLB < candObjLB  % TODO: maybe implement CAREFUL updating of the lower bound
+        if pobjLB < candObjLB  % TODO: maybe implement CAREFUL updating of the lower bound (doesn't seem to be a problem yet)
             pobjLB = candObjLB;
-        end
-
-        %% Update curvature estimate (don't need to worry about careful updating here)
-        candCurveEst = (norm(z + eta*(AHk - z) - b)^2 - norm(z-b)^2 - 2*eta*(z - b)'*(AHk - z)) / (eta^2);
-        if curveEst < candCurveEst
-            fprintf('curveEst: %d\n', candCurveEst)
-            curveEst = 2 * curveEst;
         end
     end
 
